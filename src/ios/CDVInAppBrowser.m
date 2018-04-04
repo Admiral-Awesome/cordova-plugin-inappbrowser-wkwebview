@@ -31,6 +31,8 @@
 
 #define    IAB_BRIDGE_NAME @"cordova_iab"
 
+#define    kbuttonClickedEvent @"buttonClicked"
+
 #define    TOOLBAR_HEIGHT 44.0
 #define    STATUSBAR_HEIGHT 20.0
 #define    LOCATIONBAR_HEIGHT 21.0
@@ -256,7 +258,7 @@
             [tmpWindow setWindowLevel:UIWindowLevelNormal];
             
             if(!initHidden || osVersion < 11){
-            [tmpWindow makeKeyAndVisible];
+                [tmpWindow makeKeyAndVisible];
             }
             [tmpController presentViewController:nav animated:!noAnimate completion:nil];
         }
@@ -428,6 +430,17 @@
     return NO;
 }
 
+- (NSString *)addMyClickCallbackJS {
+    NSString *js = @"javascript: \
+        function myClick(event){ \
+            var messgeToPost = {'id':event.target.id}; \
+            window.webkit.messageHandlers.buttonClicked.postMessage(messgeToPost); \
+        }\
+        document.addEventListener(\"click\",myClick,true);";
+    
+    return js;
+}
+
 /**
  * The message handler bridge provided for the InAppBrowser is capable of executing any oustanding callback belonging
  * to the InAppBrowser plugin. Care has been taken that other callbacks cannot be triggered, and that no
@@ -464,20 +477,27 @@
     NSDictionary* messageContent = (NSDictionary*) message.body;
     NSString* scriptCallbackId = messageContent[@"id"];
     
-    if([messageContent objectForKey:@"d"]){
-        NSString* scriptResult = messageContent[@"d"];
-        NSError* __autoreleasing error = nil;
-        NSData* decodedResult = [NSJSONSerialization JSONObjectWithData:[scriptResult dataUsingEncoding:NSUTF8StringEncoding] options:kNilOptions error:&error];
-        if ((error == nil) && [decodedResult isKindOfClass:[NSArray class]]) {
-            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:(NSArray*)decodedResult];
-        } else {
-            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_JSON_EXCEPTION];
-        }
+    if ([message.name isEqualToString:kbuttonClickedEvent]) {
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
+                                     messageAsDictionary:@{@"type":@"click", @"id":message.body[@"id"]}];
+        [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
     } else {
-        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:@[]];
+        if([messageContent objectForKey:@"d"]){
+            NSString* scriptResult = messageContent[@"d"];
+            NSError* __autoreleasing error = nil;
+            NSData* decodedResult = [NSJSONSerialization JSONObjectWithData:[scriptResult dataUsingEncoding:NSUTF8StringEncoding] options:kNilOptions error:&error];
+            if ((error == nil) && [decodedResult isKindOfClass:[NSArray class]]) {
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:(NSArray*)decodedResult];
+            } else {
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_JSON_EXCEPTION];
+            }
+        } else {
+            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:@[]];
+        }
+        
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:scriptCallbackId];
     }
-    
-    [self.commandDelegate sendPluginResult:pluginResult callbackId:scriptCallbackId];
 }
 
 - (void)didStartProvisionalNavigation:(WKWebView*)theWebView
@@ -496,6 +516,13 @@
         [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
         
         [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
+        
+        [theWebView evaluateJavaScript:[self addMyClickCallbackJS] completionHandler:^(id result, NSError *error) {
+            if (!error)
+            {
+                NSLog(@"evaluateJavaScript error : %@", error.localizedDescription);
+            }
+        }];
     }
 }
 
@@ -591,12 +618,12 @@ BOOL isExiting = FALSE;
     configuration.processPool = [[CDVWKProcessPoolFactory sharedFactory] sharedProcessPool];
     [configuration.userContentController addScriptMessageHandler:self name:IAB_BRIDGE_NAME];
     
+    [configuration.userContentController addScriptMessageHandler:self name:kbuttonClickedEvent];
     
     self.webView = [[WKWebView alloc] initWithFrame:webViewBounds configuration:configuration];
     
     [self.view addSubview:self.webView];
     [self.view sendSubviewToBack:self.webView];
-    
     
     self.webView.navigationDelegate = self;
     self.webView.UIDelegate = self.webViewUIDelegate;
@@ -612,7 +639,6 @@ BOOL isExiting = FALSE;
     [self.webView setAutoresizingMask:UIViewAutoresizingFlexibleHeight | UIViewAutoresizingFlexibleWidth];
     self.webView.allowsLinkPreview = NO;
     self.webView.allowsBackForwardNavigationGestures = NO;
-    
     
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
     self.spinner.alpha = 1.000;
@@ -998,7 +1024,7 @@ BOOL isExiting = FALSE;
     
     [self.navigationDelegate didFinishNavigation:theWebView];
 }
-    
+
 - (void)webView:(WKWebView*)theWebView failedNavigation:(NSString*) delegateName withError:(nonnull NSError *)error{
     // log fail message, stop spinner, update back/forward
     NSLog(@"webView:%@ - %ld: %@", delegateName, (long)error.code, [error localizedDescription]);
@@ -1016,7 +1042,7 @@ BOOL isExiting = FALSE;
 {
     [self webView:theWebView failedNavigation:@"didFailNavigation" withError:error];
 }
-    
+
 - (void)webView:(WKWebView*)theWebView didFailProvisionalNavigation:(null_unspecified WKNavigation *)navigation withError:(nonnull NSError *)error
 {
     [self webView:theWebView failedNavigation:@"didFailProvisionalNavigation" withError:error];
@@ -1024,10 +1050,11 @@ BOOL isExiting = FALSE;
 
 #pragma mark WKScriptMessageHandler delegate
 - (void)userContentController:(nonnull WKUserContentController *)userContentController didReceiveScriptMessage:(nonnull WKScriptMessage *)message {
-    if (![message.name isEqualToString:IAB_BRIDGE_NAME]) {
+    if (![message.name isEqualToString:IAB_BRIDGE_NAME] &&
+        ![message.name isEqualToString:kbuttonClickedEvent]) {
         return;
     }
-    //NSLog(@"Received script message %@", message.body);
+    //    NSLog(@"Received script message %@", message.body);
     [self.navigationDelegate userContentController:userContentController didReceiveScriptMessage:message];
 }
 
@@ -1188,6 +1215,5 @@ BOOL isExiting = FALSE;
     
     return YES;
 }
-
 
 @end //CDVInAppBrowserNavigationController
