@@ -21,6 +21,8 @@ package org.apache.cordova.inappbrowser;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Browser;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
@@ -112,6 +114,11 @@ public class InAppBrowser extends CordovaPlugin {
     private ValueCallback<Uri[]> mUploadCallbackLollipop;
     private final static int FILECHOOSER_REQUESTCODE = 1;
     private final static int FILECHOOSER_REQUESTCODE_LOLLIPOP = 2;
+    private Handler mHandler;
+
+    public interface FinishLoadListener {
+        void finishLoad();
+    }
 
     /**
      * Executes the request and returns PluginResult.
@@ -586,7 +593,7 @@ public class InAppBrowser extends CordovaPlugin {
                 return value;
             }
 
-            @SuppressLint("NewApi")
+            @SuppressLint({"NewApi", "AddJavascriptInterface"})
             public void run() {
 
                 // CB-6702 InAppBrowser hangs when opening more than one instance
@@ -765,8 +772,14 @@ public class InAppBrowser extends CordovaPlugin {
                     }
 
                 });
-                WebViewClient client = new InAppBrowserClient(thatWebView, edittext);
-                inAppWebView.setWebViewClient(client);
+                WebViewClient client = new InAppBrowserClient(thatWebView, edittext, new FinishLoadListener() {
+                    @Override
+                    public void finishLoad() {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                            inAppWebView.evaluateJavascript(addMyClickCallBackJs(), null);
+                        }
+                    }
+                });
                 WebSettings settings = inAppWebView.getSettings();
                 settings.setJavaScriptEnabled(true);
                 settings.setJavaScriptCanOpenWindowsAutomatically(true);
@@ -802,13 +815,15 @@ public class InAppBrowser extends CordovaPlugin {
                 } else if (clearSessionCache) {
                     CookieManager.getInstance().removeSessionCookie();
                 }
-
+                inAppWebView.addJavascriptInterface(new MyJsToAndroid(), "jsListener");
                 inAppWebView.loadUrl(url);
+                inAppWebView.setWebViewClient(client);
                 inAppWebView.setId(Integer.valueOf(6));
                 inAppWebView.getSettings().setLoadWithOverviewMode(true);
                 inAppWebView.getSettings().setUseWideViewPort(useWideViewPort);
                 inAppWebView.requestFocus();
                 inAppWebView.requestFocusFromTouch();
+
 
                 // Add the back and forward buttons to our action button container layout
                 actionButtonContainer.addView(back);
@@ -845,6 +860,37 @@ public class InAppBrowser extends CordovaPlugin {
         };
         this.cordova.getActivity().runOnUiThread(runnable);
         return "";
+    }
+
+    protected Handler getMainHandler() {
+        if (mHandler == null) {
+            mHandler = new Handler(Looper.getMainLooper());
+        }
+        return mHandler;
+    }
+
+    private String addMyClickCallBackJs() {
+        String js = "";
+        js += "function myClick(event){" +
+                "jsListener.myCl(event.target.id)}";
+        js += "document.addEventListener(\"click\",myClick, true);";
+        return js;
+    }
+
+    class MyJsToAndroid {
+
+        @JavascriptInterface
+        public void myCl(String id) {
+            Log.d("TAG", "myClick-> " + id);
+            try {
+                JSONObject obj = new JSONObject();
+                obj.put("type", CLICK_EVENT);
+                obj.put("id", id);
+                sendUpdate(obj, true, PluginResult.Status.OK);
+            } catch (JSONException ex) {
+                Log.d(LOG_TAG, "Should never happen");
+            }
+        }
     }
 
     /**
@@ -915,6 +961,7 @@ public class InAppBrowser extends CordovaPlugin {
     public class InAppBrowserClient extends WebViewClient {
         EditText edittext;
         CordovaWebView webView;
+        private FinishLoadListener finishLoadListener;
 
         /**
          * Constructor.
@@ -922,7 +969,8 @@ public class InAppBrowser extends CordovaPlugin {
          * @param webView
          * @param mEditText
          */
-        public InAppBrowserClient(CordovaWebView webView, EditText mEditText) {
+        public InAppBrowserClient(CordovaWebView webView, EditText mEditText, FinishLoadListener listener) {
+            this.finishLoadListener = listener;
             this.webView = webView;
             this.edittext = mEditText;
         }
@@ -1028,7 +1076,7 @@ public class InAppBrowser extends CordovaPlugin {
 
 
         @SuppressLint({"ClickableViewAccessibility", "AddJavascriptInterface"})
-        public void onPageFinished(WebView view, String url) {
+        public void onPageFinished(final WebView view, String url) {
             super.onPageFinished(view, url);
 
             // CB-10395 InAppBrowser's WebView not storing cookies reliable to local device storage
@@ -1041,12 +1089,6 @@ public class InAppBrowser extends CordovaPlugin {
             // https://issues.apache.org/jira/browse/CB-11248
             view.clearFocus();
             view.requestFocus();
-            view.addJavascriptInterface(new MyJsToAndroid(), "my");
-            WebSettings settings = view.getSettings();
-            settings.setJavaScriptEnabled(true);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                view.evaluateJavascript(addMyClickCallBackJs(), null);
-            }
             try {
                 JSONObject obj = new JSONObject();
                 obj.put("type", LOAD_STOP_EVENT);
@@ -1055,6 +1097,7 @@ public class InAppBrowser extends CordovaPlugin {
             } catch (JSONException ex) {
                 LOG.d(LOG_TAG, "Should never happen");
             }
+            finishLoadListener.finishLoad();
         }
 
         public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
@@ -1110,28 +1153,6 @@ public class InAppBrowser extends CordovaPlugin {
             // By default handle 401 like we'd normally do!
             super.onReceivedHttpAuthRequest(view, handler, host, realm);
         }
-
-        private String addMyClickCallBackJs() {
-            String js = "javascript:";
-            js += "function myClick(event){" +
-                    "my.myClick(event.target.id)}";
-            js += "document.addEventListener(\"click\",myClick,true);";
-            return js;
-        }
-
-        class MyJsToAndroid {
-            @JavascriptInterface
-            public void myClick(String id) {
-                Log.d("TAG", "myClick-> " + id);
-                try {
-                    JSONObject obj = new JSONObject();
-                    obj.put("type", CLICK_EVENT);
-                    obj.put("id", id);
-                    sendUpdate(obj, true, PluginResult.Status.OK);
-                } catch (JSONException ex) {
-                    Log.d(LOG_TAG, "Should never happen");
-                }
-            }
-        }
     }
 }
+
