@@ -74,6 +74,8 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.StringTokenizer;
 
+import static android.support.v4.content.ContextCompat.startActivity;
+
 @SuppressLint("SetJavaScriptEnabled")
 public class InAppBrowser extends CordovaPlugin {
 
@@ -457,9 +459,16 @@ public class InAppBrowser extends CordovaPlugin {
      * Checks to see if it is possible to go back one page in history, then does so.
      */
     public void goBack() {
-        if (this.inAppWebView.canGoBack()) {
-            this.inAppWebView.goBack();
-        }
+        LOG.d("BACKN", "I'm back");
+        Intent startMain = new Intent(Intent.ACTION_MAIN);
+        startMain.addCategory(Intent.CATEGORY_HOME);
+        startMain.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        cordova.getActivity().getApplicationContext().startActivity(startMain);
+
+        return;
+//        if (this.inAppWebView.canGoBack()) {
+//            this.inAppWebView.goBack();
+//        }
     }
 
     /**
@@ -468,7 +477,7 @@ public class InAppBrowser extends CordovaPlugin {
      * @return boolean
      */
     public boolean canGoBack() {
-        return this.inAppWebView.canGoBack();
+        return true;
     }
 
     /**
